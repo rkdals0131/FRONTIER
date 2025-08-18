@@ -50,14 +50,25 @@ class AABB:
 class IntersectionEngine:
     """3D Frustum과 3D Bounding Box 간의 교차 계산 엔진"""
     
-    def __init__(self, method: str = 'point_in_frustum', seed: Optional[int] = None):
+    def __init__(self,
+                 method: str = 'point_in_frustum',
+                 seed: Optional[int] = None,
+                 samples_per_axis: int = 5,
+                 voxel_size: float = 0.2,
+                 n_samples: int = 1000):
         """
         Args:
             method: 교차 계산 방법 ('point_in_frustum', 'voxel', 'sampling')
             seed: 난수 생성기 시드 (재현 가능한 결과를 위해)
+            samples_per_axis: point_in_frustum 방식에서 축당 샘플 수
+            voxel_size: voxel 방식에서 복셀 크기 (m)
+            n_samples: sampling 방식에서 무작위 샘플 개수
         """
         self.method = method
         self._rng = np.random.default_rng(seed)  # 재현 가능한 난수 생성
+        self.samples_per_axis = max(2, int(samples_per_axis))
+        self.voxel_size = float(voxel_size)
+        self.n_samples = int(n_samples)
         
     def compute_iou_3d(self, frustum: Frustum, bbox_3d: BoundingBox3D) -> float:
         """
@@ -131,9 +142,8 @@ class IntersectionEngine:
         if not self.aabb_frustum_overlap(aabb, frustum):
             return 0.0
         
-        # 박스 내부 점 샘플링 (성능 최적화: 10->5)
-        n_samples_per_axis = 5  # 125 samples total (was 1000)
-        samples = self._generate_aabb_samples(aabb, n_samples_per_axis)
+        # 박스 내부 점 샘플링 (configurable)
+        samples = self._generate_aabb_samples(aabb, self.samples_per_axis)
         
         # Frustum 내부 점 개수 계산
         inside_count = sum(1 for point in samples if frustum.contains_point(point))
@@ -150,7 +160,7 @@ class IntersectionEngine:
         else:
             return overlap_ratio * 0.7  # 부분 겹침에 대한 보정
     
-    def _voxel_based_iou(self, frustum: Frustum, aabb: AABB, voxel_size: float = 0.1) -> float:
+    def _voxel_based_iou(self, frustum: Frustum, aabb: AABB, voxel_size: float = None) -> float:
         """
         복셀 기반 IoU 계산
         
@@ -164,7 +174,7 @@ class IntersectionEngine:
         roi_min, roi_max = self._compute_roi(aabb, frustum)
         
         # 복셀 그리드 생성
-        voxels = self._generate_voxel_grid(roi_min, roi_max, voxel_size)
+        voxels = self._generate_voxel_grid(roi_min, roi_max, self.voxel_size if voxel_size is None else voxel_size)
         
         # 각 복셀에 대해 포함 여부 검사
         aabb_voxels = set()
@@ -185,7 +195,7 @@ class IntersectionEngine:
         
         return intersection / union
     
-    def _sample_based_iou(self, frustum: Frustum, aabb: AABB, n_samples: int = 1000) -> float:
+    def _sample_based_iou(self, frustum: Frustum, aabb: AABB, n_samples: Optional[int] = None) -> float:
         """
         몬테카를로 샘플링 기반 IoU 계산
         
@@ -200,7 +210,8 @@ class IntersectionEngine:
         
         # 하드캡 적용 - 너무 많은 샘플 방지
         MAX_SAMPLES = 5000
-        n_samples = min(n_samples, MAX_SAMPLES)
+        n = self.n_samples if n_samples is None else n_samples
+        n_samples = min(n, MAX_SAMPLES)
         
         # 무작위 점 생성 (시드된 난수 생성기 사용)
         samples = self._rng.uniform(roi_min, roi_max, (n_samples, 3))

@@ -13,7 +13,7 @@ from .intersection_engine import AABB
 class FrontierVisualizer:
     """RViz2를 위한 FRONTIER 시각화 도구"""
     
-    def __init__(self, frame_id: str = "base_link", marker_lifetime: float = 0.1):
+    def __init__(self, frame_id: str = "base_link", marker_lifetime: float = 0.1, class_colors: Optional[dict] = None):
         """
         Args:
             frame_id: 기본 프레임 ID
@@ -22,6 +22,7 @@ class FrontierVisualizer:
         self.frame_id = frame_id
         self.marker_id_counter = 0
         self.marker_lifetime = marker_lifetime
+        self.class_colors = class_colors or {}
         
         # 기본 색상 정의
         self.colors = {
@@ -210,12 +211,23 @@ class FrontierVisualizer:
         marker.scale.y = bbox.size.y
         marker.scale.z = bbox.size.z
         
-        # 색상 설정
+        # 색상 설정 (클래스 기반 우선)
+        chosen = None
+        try:
+            # vision_msgs Detection3DBox에는 직접 클래스 정보가 없지만
+            # 상위 Detection의 results[0].hypothesis.class_id 등을 upstream에서 전달할 수 있음
+            # 여기서는 bbox에 임시로 class_id 속성이 있을 경우만 사용
+            cls_id = getattr(bbox, 'class_id', None)
+            if isinstance(cls_id, str) and cls_id in self.class_colors:
+                chosen = tuple(self.class_colors[cls_id])
+        except Exception:
+            pass
         if color:
-            marker.color = ColorRGBA(r=color[0], g=color[1], b=color[2], a=color[3])
-        else:
+            chosen = color
+        if chosen is None:
             c = self.colors['lidar_box']
-            marker.color = ColorRGBA(r=c[0], g=c[1], b=c[2], a=c[3])
+            chosen = (c[0], c[1], c[2], c[3])
+        marker.color = ColorRGBA(r=chosen[0], g=chosen[1], b=chosen[2], a=chosen[3])
         
         # Convert seconds to nanoseconds for Duration
         lifetime_ns = int(self.marker_lifetime * 1e9)

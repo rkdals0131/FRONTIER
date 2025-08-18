@@ -15,10 +15,11 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 
 from sensor_msgs.msg import CameraInfo
-from vision_msgs.msg import Detection3DArray, Detection3D
+from vision_msgs.msg import Detection3DArray, Detection3D, BoundingBox3DArray, BoundingBox3D
 from yolo_msgs.msg import DetectionArray, BoundingBox2D
 from visualization_msgs.msg import MarkerArray
-from geometry_msgs.msg import Quaternion
+from geometry_msgs.msg import Quaternion, Pose, PoseArray, Point
+from custom_interface.msg import TrackedCone, TrackedConeArray
 from std_msgs.msg import Header
 
 import message_filters
@@ -117,8 +118,14 @@ class FrontierNode(Node):
     
     def initialize_components(self):
         """Initialize processing components"""
-        # Intersection engine
-        self.intersection_engine = IntersectionEngine(method=self.iou_method)
+        # Intersection engine (configurable sampling)
+        iou_cfg = self.config.get('iou', {})
+        self.intersection_engine = IntersectionEngine(
+            method=self.iou_method,
+            samples_per_axis=int(iou_cfg.get('samples_per_axis', 5)),
+            voxel_size=float(iou_cfg.get('voxel_size', 0.2)),
+            n_samples=int(iou_cfg.get('n_samples', 1000))
+        )
         
         # Visualizer with configurable marker lifetime
         marker_lifetime = self.config.get('visualization', {}).get('marker_lifetime_sec', 0.1)
@@ -129,7 +136,7 @@ class FrontierNode(Node):
         
         # Storage for latest messages
         self.latest_yolo_detections = {}  # camera_id -> DetectionArray
-        self.latest_lidar_detections = None  # Detection3DArray
+        self.latest_lidar_detections = None  # BoundingBox3DArray
         
         # Statistics - per camera
         self.camera_stats = {}
@@ -158,6 +165,12 @@ class FrontierNode(Node):
             self.config['fused_detections_topic'],
             1  # 버퍼 최소화
         )
+        # Fused centers as TrackedConeArray for UKF
+        self.fused_cones_pub = self.create_publisher(
+            TrackedConeArray,
+            self.config.get('fused_centers_topic', '/cone/fused'),
+            10
+        )
         
         if self.config['visualization']['publish_markers']:
             self.viz_pub = self.create_publisher(
@@ -181,7 +194,7 @@ class FrontierNode(Node):
         
         # LiDAR detection subscriber
         self.lidar_sub = self.create_subscription(
-            Detection3DArray,
+            BoundingBox3DArray,
             self.config['lidar_detections_topic'],
             self.lidar_callback,
             qos
@@ -220,20 +233,20 @@ class FrontierNode(Node):
                 f"[{camera_id}] Detection details: {len(msg.detections)} objects"
             )
     
-    def lidar_callback(self, msg: Detection3DArray):
+    def lidar_callback(self, msg: BoundingBox3DArray):
         """Callback for LiDAR 3D detections"""
         # 메모리 관리 - Python GC가 자동 처리
         
         # 탐지 개수 제한 체크 (fault 방지)
-        if len(msg.detections) > 200:
-            self.get_logger().warn(f"Too many LiDAR detections ({len(msg.detections)}), limiting to 200")
-            msg.detections = msg.detections[:200]
+        if len(msg.boxes) > 200:
+            self.get_logger().warn(f"Too many LiDAR detections ({len(msg.boxes)}), limiting to 200")
+            msg.boxes = msg.boxes[:200]
         
         self.latest_lidar_detections = msg
         
         if self.config['debug']['log_level'] == 'debug':
             self.get_logger().debug(
-                f"Received {len(msg.detections)} LiDAR detections"
+                f"Received {len(msg.boxes)} LiDAR detections"
             )
     
     def process_detections(self):
@@ -281,7 +294,7 @@ class FrontierNode(Node):
             if self.latest_lidar_detections is not None:
                 matches = self.match_frustums_to_boxes(
                     frustums,
-                    self.latest_lidar_detections.detections,
+                    self.latest_lidar_detections.boxes,
                     yolo_msg.detections,
                     cam_id
                 )
@@ -373,16 +386,16 @@ class FrontierNode(Node):
     
     def match_frustums_to_boxes(self, 
                                 frustums: List[Frustum],
-                                lidar_detections: List[Detection3D],
+                                lidar_boxes: List[BoundingBox3D],
                                 yolo_detections: List,
                                 camera_id: str) -> List[Tuple]:
         """Match frustums to 3D boxes using Hungarian algorithm"""
-        if not frustums or not lidar_detections:
+        if not frustums or not lidar_boxes:
             return []
         
         # Build cost matrix (1 - IoU)
         n_frustums = len(frustums)
-        n_boxes = len(lidar_detections)
+        n_boxes = len(lidar_boxes)
         
         # Apply limits for performance
         if n_frustums > self.config['optimization']['max_frustums']:
@@ -390,8 +403,8 @@ class FrontierNode(Node):
             n_frustums = len(frustums)
         
         if n_boxes > self.config['optimization']['max_boxes']:
-            lidar_detections = lidar_detections[:self.config['optimization']['max_boxes']]
-            n_boxes = len(lidar_detections)
+            lidar_boxes = lidar_boxes[:self.config['optimization']['max_boxes']]
+            n_boxes = len(lidar_boxes)
         
         # Compute IoU matrix with early termination
         iou_matrix = np.zeros((n_frustums, n_boxes))
@@ -401,7 +414,7 @@ class FrontierNode(Node):
         computation_count = 0
         
         for i, frustum in enumerate(frustums):
-            for j, detection_3d in enumerate(lidar_detections):
+            for j, bbox_3d in enumerate(lidar_boxes):
                 # 계산 횟수 제한 체크
                 if computation_count >= max_computations:
                     self.get_logger().debug(f"Reached max computation limit ({max_computations})")
@@ -410,9 +423,9 @@ class FrontierNode(Node):
                 # Distance gating
                 if self.config['optimization']['use_distance_gating']:
                     box_center = np.array([
-                        detection_3d.bbox.center.position.x,
-                        detection_3d.bbox.center.position.y,
-                        detection_3d.bbox.center.position.z
+                        bbox_3d.center.position.x,
+                        bbox_3d.center.position.y,
+                        bbox_3d.center.position.z
                     ])
                     distance = np.linalg.norm(box_center)
                     
@@ -422,7 +435,7 @@ class FrontierNode(Node):
                 
                 # Compute IoU
                 try:
-                    iou = self.intersection_engine.compute_iou_3d(frustum, detection_3d.bbox)
+                    iou = self.intersection_engine.compute_iou_3d(frustum, bbox_3d)
                     iou_matrix[i, j] = iou
                     computation_count += 1
                 except Exception as e:
@@ -450,7 +463,7 @@ class FrontierNode(Node):
                     iou_matrix[i, j],  # IoU value
                     camera_id,
                     yolo_detections[i],  # Original YOLO detection
-                    lidar_detections[j]   # Original LiDAR detection
+                    lidar_boxes[j]   # Original LiDAR box
                 ))
         
         return matches
@@ -484,26 +497,71 @@ class FrontierNode(Node):
         output_msg.header.frame_id = self.config['frames']['lidar_frame']
         
         # Add matched detections
+        cones_msg = TrackedConeArray()
+        cones_msg.header = output_msg.header
         for match in matches:
-            _, _, iou, camera_id, yolo_det, lidar_det = match
+            _, _, iou, camera_id, yolo_det, lidar_box = match
             
-            # Create enhanced detection with both 2D and 3D info
+            # Create enhanced detection with both 2D and 3D info (late fusion)
             fused_detection = Detection3D()
             fused_detection.header = output_msg.header
-            fused_detection.bbox = lidar_det.bbox
-            fused_detection.results = lidar_det.results
+            fused_detection.bbox = lidar_box  # BoundingBox3D is directly the bbox
             
-            # Add IoU score as confidence
-            if fused_detection.results:
-                fused_detection.results[0].score = iou
+            # Create a simple result with IoU score as confidence
+            from vision_msgs.msg import ObjectHypothesisWithPose
+            result = ObjectHypothesisWithPose()
+            result.score = iou
+            # Try to get class from YOLO detection
+            if yolo_det and hasattr(yolo_det, 'class_name'):
+                result.hypothesis.class_id = yolo_det.class_name
+            elif yolo_det and hasattr(yolo_det, 'class_id'):
+                result.hypothesis.class_id = str(yolo_det.class_id)
+            fused_detection.results = [result]
             
-            # Store camera ID in tracking ID (temporary solution)
-            fused_detection.tracking_id = camera_id
+            # Best-effort: store camera id if message has an appropriate field
+            try:
+                if hasattr(fused_detection, 'id'):
+                    # Some message variants have a string id
+                    fused_detection.id = str(camera_id)
+                elif hasattr(fused_detection, 'tracking_id'):
+                    fused_detection.tracking_id = str(camera_id)
+            except Exception:
+                pass
             
             output_msg.detections.append(fused_detection)
+
+            # Append TrackedCone for UKF
+            cone = TrackedCone()
+            cone.track_id = 0  # tracker can overwrite; we just fill position/color
+            cone.position = Point(
+                x=lidar_box.center.position.x,
+                y=lidar_box.center.position.y,
+                z=lidar_box.center.position.z
+            )
+            # Try to infer color from YOLO detection class_name
+            try:
+                raw_label = yolo_det.class_name if hasattr(yolo_det, 'class_name') else ""
+            except Exception:
+                raw_label = ""
+            lbl = raw_label.lower()
+            if "blue" in lbl:
+                cone.color = "Blue cone"
+            elif "yellow" in lbl:
+                cone.color = "Yellow cone"
+            elif "red" in lbl:
+                cone.color = "Red cone"
+            elif raw_label:
+                # Fallback: use raw string
+                cone.color = raw_label
+            else:
+                cone.color = "Unknown"
+            cones_msg.cones.append(cone)
         
         # Publish fused detections
         self.fused_pub.publish(output_msg)
+        # Publish fused cones
+        if cones_msg.cones:
+            self.fused_cones_pub.publish(cones_msg)
         
         # Publish visualization if enabled
         if self.config['visualization']['publish_markers'] and self.viz_pub:
@@ -616,7 +674,7 @@ class FrontierNode(Node):
             if is_matched and lidar_det:
                 # Create box marker
                 box_marker = self.visualizer.create_bbox_marker(
-                    lidar_det.bbox,
+                    lidar_det,  # BoundingBox3D is directly the bbox
                     self.config['frames']['lidar_frame'],
                     tuple(self.config['visualization']['matched_box_color']),
                     f"box_{cam_id}_{idx}"
@@ -626,9 +684,9 @@ class FrontierNode(Node):
                 # Create match line
                 frustum_center = np.mean(frustum.corners, axis=0)
                 box_center = np.array([
-                    lidar_det.bbox.center.position.x,
-                    lidar_det.bbox.center.position.y,
-                    lidar_det.bbox.center.position.z
+                    lidar_det.center.position.x,
+                    lidar_det.center.position.y,
+                    lidar_det.center.position.z
                 ])
                 
                 line_marker = self.visualizer.create_match_line(

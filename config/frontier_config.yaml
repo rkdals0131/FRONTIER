@@ -13,7 +13,7 @@ frontier:
       camera_info_topic: "/camera_2/camera_info"
   
   # Output topics
-  fused_detections_topic: "/frontier/fused_detections"  # vision_msgs/Detection3DArray
+  fused_detections_topic: "/cone/fused/box"  # vision_msgs/Detection3DArray
   visualization_topic: "/frontier/visualization"         # visualization_msgs/MarkerArray
   
   # Frustum parameters
@@ -94,10 +94,16 @@ frontier:
     frustum_color: [0.0, 1.0, 0.0, 0.3]      # Green, semi-transparent
     lidar_box_color: [0.0, 0.0, 1.0, 0.5]    # Blue
     matched_frustum_color: [1.0, 1.0, 0.0, 0.5]  # Yellow
-    matched_box_color: [1.0, 0.5, 0.0, 0.7]      # Orange
+    matched_box_color: [1.0, 0.5, 0.0, 0.7]      # Orange (fallback)
     match_line_color: [1.0, 1.0, 0.0, 0.8]       # Yellow
     text_scale: 0.15
     marker_lifetime_sec: 0.1     # 짧게 설정하여 빠른 업데이트
+    # 클래스별 색상 (라벨 키워드 매칭)
+    class_colors:
+      yellow: [1.0, 1.0, 0.0, 0.7]
+      blue:   [0.0, 0.5, 1.0, 0.7]
+      orange: [1.0, 0.5, 0.0, 0.7]
+      cone:   [1.0, 0.5, 0.0, 0.7]
     
   # Debug options
   debug:
