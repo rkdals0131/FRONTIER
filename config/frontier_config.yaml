@@ -1,0 +1,90 @@
+# FRONTIER Configuration File
+# Frustum-based Refined Object Networking & Tracking via Intersection Engine for Ranging-data
+
+frontier:
+  # Input topics
+  lidar_detections_topic: "/cone/lidar/box"  # vision_msgs/Detection3DArray
+  cameras:
+    - id: "camera_1"
+      detections_topic: "/camera_1/detections"  # vision_msgs/Detection2DArray
+      camera_info_topic: "/camera_1/camera_info"     # sensor_msgs/CameraInfo
+    - id: "camera_2"
+      detections_topic: "/camera_2/detections"
+      camera_info_topic: "/camera_2/camera_info"
+  
+  # Output topics
+  fused_detections_topic: "/frontier/fused_detections"  # vision_msgs/Detection3DArray
+  visualization_topic: "/frontier/visualization"         # visualization_msgs/MarkerArray
+  
+  # Frustum parameters
+  frustum:
+    near_distance: 1.0    # meters
+    far_distance: 50.0    # meters
+    
+  # IoU calculation method
+  iou:
+    method: "point_in_frustum"  # Options: "point_in_frustum", "voxel", "sampling"
+    n_samples: 500              # For sampling method (reduced for performance)
+    voxel_size: 0.2            # For voxel method (meters) - larger for speed
+    samples_per_axis: 5         # For point_in_frustum method (125 samples total)
+    
+  # Matching parameters
+  matching:
+    iou_threshold: 0.3          # Minimum IoU for valid match
+    max_distance: 50.0          # Maximum distance for consideration (meters)
+    method: "hungarian"         # Options: "hungarian", "greedy"
+    timeout_ms: 20              # Timeout for matching algorithm
+    
+  # Distance-based thresholds
+  distance_gates:
+    near:
+      max_distance: 10.0
+      min_iou: 0.2
+    medium:
+      max_distance: 30.0
+      min_iou: 0.25
+    far:
+      max_distance: 50.0
+      min_iou: 0.3
+      
+  # Performance optimization (실시간성 중시)
+  optimization:
+    max_frustums: 20            # Maximum number of frustums to process (reduced)
+    max_boxes: 50               # Maximum number of 3D boxes to process (reduced)
+    use_distance_gating: true   # Enable distance-based filtering
+    use_fov_gating: true        # Enable field-of-view filtering
+    fov_margin_deg: 5.0         # FOV margin in degrees
+    
+  # Calibration files (relative to config folder)
+  calibration:
+    intrinsic_file: "multi_camera_intrinsic_calibration.yaml"
+    extrinsic_file: "multi_camera_extrinsic_calibration.yaml"
+    apply_distortion_correction: true  # Apply distortion correction in unprojection
+    
+  # Coordinate frames
+  frames:
+    lidar_frame: "os_sensor"     # or "velodyne" depending on your lidar
+    base_frame: "base_link"
+    
+  # Time synchronization (실시간성 우선)
+  sync:
+    queue_size: 3                # Message queue size (reduced for low latency)
+    slop_seconds: 0.1           # Maximum time difference (100ms - more forgiving)
+    
+  # Visualization settings
+  visualization:
+    publish_markers: true
+    frustum_color: [0.0, 1.0, 0.0, 0.3]      # Green, semi-transparent
+    lidar_box_color: [0.0, 0.0, 1.0, 0.5]    # Blue
+    matched_frustum_color: [1.0, 1.0, 0.0, 0.5]  # Yellow
+    matched_box_color: [1.0, 0.5, 0.0, 0.7]      # Orange
+    match_line_color: [1.0, 1.0, 0.0, 0.8]       # Yellow
+    text_scale: 0.15
+    marker_lifetime_sec: 0.5     # Increased to reduce recreation frequency
+    
+  # Debug options
+  debug:
+    print_timings: false         # Print processing times
+    print_matches: true          # Print matching results
+    save_iou_matrix: false       # Save IoU matrix to file
+    log_level: "info"           # Options: "debug", "info", "warn", "error"
