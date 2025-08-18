@@ -19,7 +19,7 @@ frontier:
   # Frustum parameters
   frustum:
     near_distance: 1.0    # meters
-    far_distance: 50.0    # meters
+    far_distance: 15.0    # meters
     
   # IoU calculation method
   iou:
@@ -74,13 +74,14 @@ frontier:
   # Visualization settings
   visualization:
     publish_markers: true
+    publish_rate_hz: 20.0        # 시각화 주사율 (10/20/30 Hz 권장)
     frustum_color: [0.0, 1.0, 0.0, 0.3]      # Green, semi-transparent
     lidar_box_color: [0.0, 0.0, 1.0, 0.5]    # Blue
     matched_frustum_color: [1.0, 1.0, 0.0, 0.5]  # Yellow
     matched_box_color: [1.0, 0.5, 0.0, 0.7]      # Orange
     match_line_color: [1.0, 1.0, 0.0, 0.8]       # Yellow
     text_scale: 0.15
-    marker_lifetime_sec: 0.5     # Increased to reduce recreation frequency
+    marker_lifetime_sec: 0.1     # 짧게 설정하여 빠른 업데이트
     
   # Debug options
   debug:

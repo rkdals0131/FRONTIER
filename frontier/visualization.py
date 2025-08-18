@@ -13,13 +13,15 @@ from .intersection_engine import AABB
 class FrontierVisualizer:
     """RViz2를 위한 FRONTIER 시각화 도구"""
     
-    def __init__(self, frame_id: str = "base_link"):
+    def __init__(self, frame_id: str = "base_link", marker_lifetime: float = 0.1):
         """
         Args:
             frame_id: 기본 프레임 ID
+            marker_lifetime: 마커 유지 시간 (초)
         """
         self.frame_id = frame_id
         self.marker_id_counter = 0
+        self.marker_lifetime = marker_lifetime
         
         # 기본 색상 정의
         self.colors = {
@@ -91,7 +93,83 @@ class FrontierVisualizer:
             marker.points.append(camera_pt)
             marker.points.append(Point(x=corners[i][0], y=corners[i][1], z=corners[i][2]))
         
-        marker.lifetime = Duration(sec=0, nanosec=500000000)  # 0.5초 - 재생성 빈도 감소
+        # Convert seconds to nanoseconds for Duration
+        lifetime_ns = int(self.marker_lifetime * 1e9)
+        marker.lifetime = Duration(sec=int(self.marker_lifetime), nanosec=lifetime_ns % int(1e9))
+        
+        return marker
+    
+    def create_frustum_filled_marker(self, 
+                                   frustum: Frustum,
+                                   frame_id: Optional[str] = None,
+                                   color: Optional[Tuple[float, float, float, float]] = None,
+                                   namespace: str = "frustum_filled") -> Marker:
+        """
+        Frustum을 반투명 면으로 채운 마커 생성
+        
+        Args:
+            frustum: View Frustum 객체
+            frame_id: 프레임 ID (None이면 기본값 사용)
+            color: RGBA 색상 (None이면 기본 frustum 색상 사용)
+            namespace: 마커 네임스페이스
+            
+        Returns:
+            Frustum 채워진 면 마커
+        """
+        marker = Marker()
+        marker.header.frame_id = frame_id or self.frame_id
+        marker.header.stamp.sec = 0
+        marker.header.stamp.nanosec = 0
+        marker.ns = namespace
+        marker.id = self._get_next_id()
+        marker.type = Marker.TRIANGLE_LIST
+        marker.action = Marker.ADD
+        
+        # 스케일 설정 (TRIANGLE_LIST는 scale 사용 안 함)
+        marker.scale.x = 1.0
+        marker.scale.y = 1.0
+        marker.scale.z = 1.0
+        
+        # 색상 설정 (더 투명하게)
+        if color:
+            # 면은 와이어프레임보다 더 투명하게
+            marker.color = ColorRGBA(r=color[0], g=color[1], b=color[2], a=color[3] * 0.3)
+        else:
+            c = self.colors['frustum']
+            marker.color = ColorRGBA(r=c[0], g=c[1], b=c[2], a=c[3] * 0.3)
+        
+        # Frustum 코너 가져오기
+        corners = frustum.corners
+        
+        # 6개 면을 삼각형으로 정의
+        # 각 면은 2개의 삼각형으로 구성
+        faces = [
+            # Near 평면 (0-1-2-3)
+            [0, 1, 2], [0, 2, 3],
+            # Far 평면 (4-5-6-7)
+            [4, 6, 5], [4, 7, 6],
+            # Top 면 (2-3-7-6)
+            [2, 6, 7], [2, 7, 3],
+            # Bottom 면 (0-1-5-4)
+            [0, 4, 5], [0, 5, 1],
+            # Left 면 (0-3-7-4)
+            [0, 3, 7], [0, 7, 4],
+            # Right 면 (1-2-6-5)
+            [1, 5, 6], [1, 6, 2]
+        ]
+        
+        # 삼각형 점들 추가
+        for face in faces:
+            for idx in face:
+                marker.points.append(Point(
+                    x=corners[idx][0],
+                    y=corners[idx][1],
+                    z=corners[idx][2]
+                ))
+        
+        # Convert seconds to nanoseconds for Duration
+        lifetime_ns = int(self.marker_lifetime * 1e9)
+        marker.lifetime = Duration(sec=int(self.marker_lifetime), nanosec=lifetime_ns % int(1e9))
         
         return marker
     
@@ -139,7 +217,9 @@ class FrontierVisualizer:
             c = self.colors['lidar_box']
             marker.color = ColorRGBA(r=c[0], g=c[1], b=c[2], a=c[3])
         
-        marker.lifetime = Duration(sec=0, nanosec=500000000)  # 0.5초 - 재생성 빈도 감소
+        # Convert seconds to nanoseconds for Duration
+        lifetime_ns = int(self.marker_lifetime * 1e9)
+        marker.lifetime = Duration(sec=int(self.marker_lifetime), nanosec=lifetime_ns % int(1e9))
         
         return marker
     
@@ -182,7 +262,9 @@ class FrontierVisualizer:
         marker.points.append(p1)
         marker.points.append(p2)
         
-        marker.lifetime = Duration(sec=0, nanosec=500000000)  # 0.5초 - 재생성 빈도 감소
+        # Convert seconds to nanoseconds for Duration
+        lifetime_ns = int(self.marker_lifetime * 1e9)
+        marker.lifetime = Duration(sec=int(self.marker_lifetime), nanosec=lifetime_ns % int(1e9))
         
         return marker
     
@@ -229,7 +311,9 @@ class FrontierVisualizer:
         # 텍스트
         marker.text = text
         
-        marker.lifetime = Duration(sec=0, nanosec=500000000)  # 0.5초 - 재생성 빈도 감소
+        # Convert seconds to nanoseconds for Duration
+        lifetime_ns = int(self.marker_lifetime * 1e9)
+        marker.lifetime = Duration(sec=int(self.marker_lifetime), nanosec=lifetime_ns % int(1e9))
         
         return marker
     
@@ -364,7 +448,9 @@ class FrontierVisualizer:
             marker.points.append(p1)
             marker.points.append(p2)
         
-        marker.lifetime = Duration(sec=0, nanosec=500000000)  # 0.5초 - 재생성 빈도 감소
+        # Convert seconds to nanoseconds for Duration
+        lifetime_ns = int(self.marker_lifetime * 1e9)
+        marker.lifetime = Duration(sec=int(self.marker_lifetime), nanosec=lifetime_ns % int(1e9))
         
         return marker
     

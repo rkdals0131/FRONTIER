@@ -99,14 +99,26 @@ class FrontierNode(Node):
         # Intersection engine
         self.intersection_engine = IntersectionEngine(method=self.iou_method)
         
-        # Visualizer
-        self.visualizer = FrontierVisualizer(frame_id=self.config['frames']['lidar_frame'])
+        # Visualizer with configurable marker lifetime
+        marker_lifetime = self.config.get('visualization', {}).get('marker_lifetime_sec', 0.1)
+        self.visualizer = FrontierVisualizer(
+            frame_id=self.config['frames']['lidar_frame'],
+            marker_lifetime=marker_lifetime
+        )
         
         # Storage for latest messages
         self.latest_yolo_detections = {}  # camera_id -> DetectionArray
         self.latest_lidar_detections = None  # Detection3DArray
         
-        # Statistics
+        # Statistics - per camera
+        self.camera_stats = {}
+        for cam_id in self.calibrations.keys():
+            self.camera_stats[cam_id] = {
+                'detections_received': 0,
+                'matches': 0,
+                'frustums_generated': 0,
+                'last_received': None
+            }
         self.total_matches = 0
         self.total_processed = 0
     
@@ -154,8 +166,11 @@ class FrontierNode(Node):
             qos
         )
         
-        # Timer for processing - 10Hz로 감소하여 CPU 부하 절감
-        self.process_timer = self.create_timer(0.1, self.process_detections)  # 10Hz
+        # Timer for processing - config에서 설정 가능 (기본 20Hz)
+        viz_rate = self.config.get('visualization', {}).get('publish_rate_hz', 20.0)
+        timer_period = 1.0 / viz_rate
+        self.process_timer = self.create_timer(timer_period, self.process_detections)
+        self.get_logger().info(f"Visualization timer set to {viz_rate}Hz (period: {timer_period:.3f}s)")
     
     def yolo_callback(self, msg: DetectionArray, camera_id: str):
         """Callback for YOLO 2D detections"""
@@ -168,9 +183,20 @@ class FrontierNode(Node):
         
         self.latest_yolo_detections[camera_id] = msg
         
+        # Update camera statistics
+        if camera_id in self.camera_stats:
+            self.camera_stats[camera_id]['detections_received'] += 1
+            self.camera_stats[camera_id]['last_received'] = self.get_clock().now()
+        
+        # Enhanced logging for camera distinction
+        self.get_logger().info(
+            f"[{camera_id}] Received {len(msg.detections)} YOLO detections "
+            f"(Total: {self.camera_stats[camera_id]['detections_received']})"
+        )
+        
         if self.config['debug']['log_level'] == 'debug':
             self.get_logger().debug(
-                f"Received {len(msg.detections)} YOLO detections from {camera_id}"
+                f"[{camera_id}] Detection details: {len(msg.detections)} objects"
             )
     
     def lidar_callback(self, msg: Detection3DArray):
@@ -191,44 +217,71 @@ class FrontierNode(Node):
     
     def process_detections(self):
         """Main processing function - match 2D and 3D detections"""
-        # Check if we have data
-        if self.latest_lidar_detections is None:
-            return
-        
+        # Check if we have YOLO data (LiDAR is optional for visualization)
         if not self.latest_yolo_detections:
             return
         
         # Process each camera
         all_matches = []
+        all_frustums = []  # Store all frustums for visualization
+        cameras_processed = []
         
         for cam_id, yolo_msg in self.latest_yolo_detections.items():
             if cam_id not in self.frustum_generators:
+                self.get_logger().warn(f"No frustum generator for {cam_id}")
                 continue
             
-            # Check time synchronization
-            time_diff = abs(
-                yolo_msg.header.stamp.sec - self.latest_lidar_detections.header.stamp.sec
-            ) + abs(
-                yolo_msg.header.stamp.nanosec - self.latest_lidar_detections.header.stamp.nanosec
-            ) * 1e-9
-            
-            if time_diff > self.config['sync']['slop_seconds']:
-                continue
+            # Check time synchronization only if we have LiDAR data
+            if self.latest_lidar_detections is not None:
+                time_diff = abs(
+                    yolo_msg.header.stamp.sec - self.latest_lidar_detections.header.stamp.sec
+                ) + abs(
+                    yolo_msg.header.stamp.nanosec - self.latest_lidar_detections.header.stamp.nanosec
+                ) * 1e-9
+                
+                if time_diff > self.config['sync']['slop_seconds']:
+                    self.get_logger().debug(f"[{cam_id}] Time sync failed: {time_diff:.3f}s > {self.config['sync']['slop_seconds']}s")
+                    continue
             
             # Generate frustums from YOLO detections
             frustums = self.generate_frustums(yolo_msg, cam_id)
             
-            # Perform matching
-            matches = self.match_frustums_to_boxes(
-                frustums,
-                self.latest_lidar_detections.detections,
-                yolo_msg.detections,
-                cam_id
-            )
+            if frustums:
+                self.camera_stats[cam_id]['frustums_generated'] += len(frustums)
+                self.get_logger().info(
+                    f"[{cam_id}] Generated {len(frustums)} frustums from {len(yolo_msg.detections)} detections"
+                )
+                
+                # Store all frustums with camera ID and YOLO detection for visualization
+                for i, frustum in enumerate(frustums):
+                    all_frustums.append((cam_id, frustum, yolo_msg.detections[i] if i < len(yolo_msg.detections) else None))
             
-            all_matches.extend(matches)
+            # Perform matching only if we have LiDAR data
+            if self.latest_lidar_detections is not None:
+                matches = self.match_frustums_to_boxes(
+                    frustums,
+                    self.latest_lidar_detections.detections,
+                    yolo_msg.detections,
+                    cam_id
+                )
+                
+                if matches:
+                    self.camera_stats[cam_id]['matches'] += len(matches)
+                    self.get_logger().info(
+                        f"[{cam_id}] Found {len(matches)} matches with LiDAR boxes"
+                    )
+                
+                all_matches.extend(matches)
+            else:
+                self.get_logger().debug(f"[{cam_id}] No LiDAR data for matching")
+            
+            cameras_processed.append(cam_id)
         
-        # Publish results
+        # Log which cameras were processed
+        if cameras_processed:
+            self.get_logger().info(f"Processed cameras: {', '.join(cameras_processed)}")
+        
+        # Publish results and visualization
         if all_matches:
             self.publish_results(all_matches)
             
@@ -237,10 +290,20 @@ class FrontierNode(Node):
             self.total_processed += 1
             
             if self.config['debug']['print_matches']:
+                # Print overall and per-camera statistics
+                cam_summary = ", ".join(
+                    f"{cam}: {self.camera_stats[cam]['matches']}"
+                    for cam in self.camera_stats.keys()
+                )
                 self.get_logger().info(
                     f"Found {len(all_matches)} matches "
-                    f"(Total: {self.total_matches}/{self.total_processed})"
+                    f"(Total: {self.total_matches}/{self.total_processed}) "
+                    f"[{cam_summary}]"
                 )
+        
+        # Always publish visualization if we have frustums (matched or not)
+        if all_frustums and self.config['visualization']['publish_markers'] and self.viz_pub:
+            self.publish_all_frustum_visualization(all_frustums, all_matches)
         
         # 메모리 최적화 - 처리 완료 후 즉시 참조 해제
         self.latest_lidar_detections = None
@@ -421,49 +484,91 @@ class FrontierNode(Node):
         if self.config['visualization']['publish_markers'] and self.viz_pub:
             self.publish_visualization(matches)
     
-    def publish_visualization(self, matches: List[Tuple]):
-        """Publish visualization markers"""
+    def publish_all_frustum_visualization(self, all_frustums: List[Tuple], matches: List[Tuple]):
+        """Publish visualization markers for all frustums (matched and unmatched)"""
         # Create marker array
         marker_array = MarkerArray()
         
         # Reset visualizer ID counter
         self.visualizer.reset_id_counter()
         
-        # 매치 개수 제한 (시각화 성능)
-        max_viz_matches = min(len(matches), 10)  # 최대 10개만 시각화
+        # Debug mode에서는 더 많이 시각화
+        if self.config['debug']['log_level'] == 'debug':
+            max_viz_frustums = min(len(all_frustums), 30)  # Debug: 최대 30개
+        else:
+            max_viz_frustums = min(len(all_frustums), 15)  # Normal: 최대 15개
         
-        # Add markers for each match
-        for i, match in enumerate(matches[:max_viz_matches]):
+        # Camera-specific colors for unmatched frustums
+        camera_unmatched_colors = {
+            'camera_1': [1.0, 0.5, 0.0, 0.3],  # Orange (semi-transparent) for camera_1
+            'camera_2': [0.0, 0.5, 1.0, 0.3],  # Light Blue (semi-transparent) for camera_2
+        }
+        
+        # Camera-specific colors for matched frustums
+        camera_matched_colors = {
+            'camera_1': [1.0, 1.0, 0.0, 0.6],  # Yellow (more opaque) for camera_1
+            'camera_2': [0.0, 1.0, 1.0, 0.6],  # Cyan (more opaque) for camera_2
+        }
+        
+        # Create a set of matched frustum indices for quick lookup
+        matched_frustum_info = {}
+        for match in matches:
             frustum_idx, box_idx, iou, camera_id, yolo_det, lidar_det = match
+            key = (camera_id, frustum_idx)
+            matched_frustum_info[key] = (iou, lidar_det)
+        
+        # Visualize all frustums
+        for idx, (cam_id, frustum, yolo_det) in enumerate(all_frustums[:max_viz_frustums]):
+            # Check if this frustum is matched
+            is_matched = False
+            iou = 0.0
+            lidar_det = None
             
-            # Skip visualization for low IoU matches
-            if iou < 0.2:  # 낮은 IoU는 시각화 생략
-                continue
+            # Find if this frustum has a match
+            for i, (cam, f, y) in enumerate(all_frustums[:len(all_frustums)]):
+                if cam == cam_id and i in [m[0] for m in matches if m[3] == cam_id]:
+                    # This frustum is matched
+                    for m in matches:
+                        if m[3] == cam_id and m[0] == i:
+                            is_matched = True
+                            iou = m[2]
+                            lidar_det = m[5]
+                            break
+                    if is_matched:
+                        break
             
-            try:
-                # Get frustum (재사용 대신 필요시에만 생성)
-                generator = self.frustum_generators[camera_id]
-                frustum = generator.generate_frustum(
-                    yolo_det.bbox,
-                    self.near_distance,
-                    self.far_distance
-                )
+            # Choose color based on match status
+            if is_matched:
+                frustum_color = camera_matched_colors.get(cam_id, [0.5, 0.5, 0.5, 0.6])
+            else:
+                frustum_color = camera_unmatched_colors.get(cam_id, [0.5, 0.5, 0.5, 0.3])
             
-                # Create frustum marker
-                frustum_marker = self.visualizer.create_frustum_marker(
-                    frustum,
-                    self.config['frames']['lidar_frame'],
-                    tuple(self.config['visualization']['matched_frustum_color']),
-                    f"frustum_{camera_id}_{frustum_idx}"
-                )
-                marker_array.markers.append(frustum_marker)
-                
+            # Create frustum wireframe marker
+            frustum_marker = self.visualizer.create_frustum_marker(
+                frustum,
+                self.config['frames']['lidar_frame'],
+                tuple(frustum_color),
+                f"frustum_{cam_id}_{idx}"
+            )
+            marker_array.markers.append(frustum_marker)
+            
+            # Create frustum filled (semi-transparent) marker
+            frustum_filled_marker = self.visualizer.create_frustum_filled_marker(
+                frustum,
+                self.config['frames']['lidar_frame'],
+                tuple(frustum_color),
+                f"frustum_filled_{cam_id}_{idx}"
+            )
+            marker_array.markers.append(frustum_filled_marker)
+            
+            # If matched, add box and connection line
+            if is_matched and lidar_det:
                 # Create box marker
                 box_marker = self.visualizer.create_bbox_marker(
                     lidar_det.bbox,
                     self.config['frames']['lidar_frame'],
                     tuple(self.config['visualization']['matched_box_color']),
-                    f"box_{box_idx}"
+                    f"box_{cam_id}_{idx}"
                 )
                 marker_array.markers.append(box_marker)
                 
@@ -479,26 +584,20 @@ class FrontierNode(Node):
                     frustum_center,
                     box_center,
                     self.config['frames']['lidar_frame'],
-                    f"match_line_{frustum_idx}_{box_idx}"
+                    f"match_line_{cam_id}_{idx}"
                 )
                 marker_array.markers.append(line_marker)
                 
-                # Create IoU text
+                # Create IoU text with camera ID
                 text_position = (frustum_center + box_center) / 2.0
                 text_marker = self.visualizer.create_text_marker(
-                    f"IoU: {iou:.2f}",
+                    f"{cam_id}\nIoU: {iou:.2f}",
                     text_position,
                     self.config['frames']['lidar_frame'],
                     self.config['visualization']['text_scale'],
-                    f"iou_text_{frustum_idx}_{box_idx}"
+                    f"iou_text_{cam_id}_{idx}"
                 )
                 marker_array.markers.append(text_marker)
-            
-            except Exception as e:
-                # 시각화 실패 시 계속 진행
-                if i < 3:  # 처음 3개만 경고
-                    self.get_logger().warn(f"Visualization failed for match {i}: {e}")
-                continue
         
         # Set timestamp for all markers
         now = self.get_clock().now().to_msg()
@@ -507,6 +606,16 @@ class FrontierNode(Node):
         
         # Publish
         self.viz_pub.publish(marker_array)
+        self.get_logger().debug(
+            f"Published {len(marker_array.markers)} visualization markers "
+            f"({len(all_frustums)} frustums, {len(matches)} matches)"
+        )
+    
+    def publish_visualization(self, matches: List[Tuple]):
+        """Legacy visualization for matched objects only (kept for compatibility)"""
+        # This method is now replaced by publish_all_frustum_visualization
+        # but kept here in case it's called from elsewhere
+        pass
 
 
 def main(args=None):
