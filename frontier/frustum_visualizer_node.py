@@ -26,6 +26,7 @@ from builtin_interfaces.msg import Duration
 from .calibration_loader import CalibrationLoader, CameraCalibration
 from .frustum_generator import FrustumGenerator, Frustum
 from .visualization import FrontierVisualizer
+from .adaptive_frustum import AdaptiveFrustumEstimator, AdaptiveFrustumConfig
 
 
 class FrustumVisualizerNode(Node):
@@ -85,8 +86,28 @@ class FrustumVisualizerNode(Node):
         
         # Initialize components
         self.frustum_generators = {}
+        self.adaptive_estimators = {}
         for cam_id in self.calibrations.keys():
             self.frustum_generators[cam_id] = FrustumGenerator(self.calibrations[cam_id])
+        # Adaptive estimator per camera (optional via config)
+        adaptive_cfg = (self.config or {}).get('adaptive_frustum', {})
+        self.adaptive_enabled = bool(adaptive_cfg.get('enabled', False))
+        for cam_id, calib in self.calibrations.items():
+            try:
+                cfg = AdaptiveFrustumConfig(
+                    enabled=self.adaptive_enabled,
+                    object_height_m=adaptive_cfg.get('object_height_m', 0.70),
+                    object_width_m=adaptive_cfg.get('object_width_m', 0.30),
+                    near_min_m=adaptive_cfg.get('near_min_m', self.near_distance),
+                    far_max_m=adaptive_cfg.get('far_max_m', self.far_distance),
+                    margin_min=adaptive_cfg.get('margin_min', 0.15),
+                    margin_max=adaptive_cfg.get('margin_max', 0.80),
+                    area_thresholds=tuple(adaptive_cfg.get('area_thresholds', [0.10, 0.05, 0.02]))
+                )
+                self.adaptive_estimators[cam_id] = AdaptiveFrustumEstimator(calib, cfg)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to init adaptive estimator for {cam_id}: {e}")
+
         self.visualizer = FrontierVisualizer(frame_id='os_sensor')  # LiDAR frame
         
         # Storage for latest messages
@@ -219,10 +240,14 @@ class FrustumVisualizerNode(Node):
         # Generate frustums for ALL cameras with the same bbox
         all_frustums = []
         for cam_id, generator in self.frustum_generators.items():
+            if self.adaptive_enabled and cam_id in self.adaptive_estimators:
+                near_d, far_d = self.adaptive_estimators[cam_id].compute_near_far(bbox)
+            else:
+                near_d, far_d = self.near_distance, self.far_distance
             frustum = generator.generate_frustum(
                 bbox,
-                self.near_distance,
-                self.far_distance
+                float(near_d),
+                float(far_d)
             )
             all_frustums.append((cam_id, frustum, bbox))
         
@@ -322,11 +347,15 @@ class FrustumVisualizerNode(Node):
                         continue
                     
                     try:
-                        # Generate frustum
+                        # Generate frustum (adaptive near/far if enabled)
+                        if self.adaptive_enabled and cam_id in self.adaptive_estimators:
+                            near_d, far_d = self.adaptive_estimators[cam_id].compute_near_far(bbox)
+                        else:
+                            near_d, far_d = self.near_distance, self.far_distance
                         frustum = generator.generate_frustum(
                             bbox,
-                            self.near_distance,
-                            self.far_distance
+                            float(near_d),
+                            float(far_d)
                         )
                         all_camera_frustums.append((cam_id, frustum, bbox))
                         

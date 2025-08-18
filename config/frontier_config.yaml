@@ -20,6 +20,22 @@ frontier:
   frustum:
     near_distance: 1.0    # meters
     far_distance: 15.0    # meters
+
+  # Adaptive frustum (monocular depth rule-based)
+  adaptive_frustum:
+    enabled: true
+    mode: "fine"            # switched to fine for near-range boost
+    object_height_m: 0.70   # 70 cm
+    object_width_m: 0.30    # 30 cm
+    near_min_m: 0.5
+    far_max_m: 100.0        # extend far limit further
+    # Fine-mode params
+    margin_min: 1.40        # near (large bbox): increase margin more
+    margin_max: 1.50        # far (tiny bbox): slightly lower than before
+    area_thresholds: [0.10, 0.05, 0.02]
+    # Coarse-mode params (ignored in fine)
+    coarse_thresholds: [0.06, 0.02]
+    coarse_margins: [0.50, 0.90, 1.40]
     
   # IoU calculation method
   iou:
@@ -30,8 +46,8 @@ frontier:
     
   # Matching parameters
   matching:
-    iou_threshold: 0.3          # Minimum IoU for valid match
-    max_distance: 50.0          # Maximum distance for consideration (meters)
+    iou_threshold: 0.2          # Lowered to reduce false negatives
+    max_distance: 70.0          # Slightly extend to avoid FNs
     method: "hungarian"         # Options: "hungarian", "greedy"
     timeout_ms: 20              # Timeout for matching algorithm
     
@@ -49,10 +65,10 @@ frontier:
       
   # Performance optimization (실시간성 중시)
   optimization:
-    max_frustums: 20            # Maximum number of frustums to process (reduced)
-    max_boxes: 50               # Maximum number of 3D boxes to process (reduced)
-    use_distance_gating: true   # Enable distance-based filtering
-    use_fov_gating: true        # Enable field-of-view filtering
+    max_frustums: 50            # Increase to avoid dropping candidates
+    max_boxes: 100              # Increase to avoid dropping boxes
+    use_distance_gating: false  # Disable to avoid false negatives
+    use_fov_gating: false       # Disable to avoid false negatives
     fov_margin_deg: 5.0         # FOV margin in degrees
     
   # Calibration files (relative to config folder)
@@ -69,7 +85,7 @@ frontier:
   # Time synchronization (실시간성 우선)
   sync:
     queue_size: 3                # Message queue size (reduced for low latency)
-    slop_seconds: 0.1           # Maximum time difference (100ms - more forgiving)
+    slop_seconds: 0.2           # Slightly more tolerant sync to reduce FN
     
   # Visualization settings
   visualization:

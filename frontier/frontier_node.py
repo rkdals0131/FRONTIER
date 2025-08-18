@@ -28,6 +28,7 @@ from .calibration_loader import CalibrationLoader, CameraCalibration
 from .frustum_generator import FrustumGenerator, Frustum
 from .intersection_engine import IntersectionEngine
 from .visualization import FrontierVisualizer
+from .adaptive_frustum import AdaptiveFrustumEstimator, AdaptiveFrustumConfig
 
 
 class FrontierNode(Node):
@@ -73,6 +74,9 @@ class FrontierNode(Node):
         self.far_distance = self.config['frustum']['far_distance']
         self.iou_method = self.config['iou']['method']
         self.apply_distortion = self.config['calibration']['apply_distortion_correction']
+        # Adaptive frustum (optional)
+        self.adaptive_settings = self.config.get('adaptive_frustum', {}) or {}
+        self.adaptive_enabled = bool(self.adaptive_settings.get('enabled', False))
     
     def load_calibrations(self):
         """Load camera calibration parameters"""
@@ -90,9 +94,26 @@ class FrontierNode(Node):
         
         # Create frustum generators for each camera
         self.frustum_generators = {}
+        self.adaptive_estimators = {}
         for cam_id in self.calibrations.keys():
             self.frustum_generators[cam_id] = FrustumGenerator(self.calibrations[cam_id])
             self.get_logger().info(f"Loaded calibration for {cam_id}")
+
+            # Initialize adaptive estimator per camera if enabled
+            try:
+                cfg = AdaptiveFrustumConfig(
+                    enabled=self.adaptive_enabled,
+                    object_height_m=self.adaptive_settings.get('object_height_m', 0.70),
+                    object_width_m=self.adaptive_settings.get('object_width_m', 0.30),
+                    near_min_m=self.adaptive_settings.get('near_min_m', self.near_distance),
+                    far_max_m=self.adaptive_settings.get('far_max_m', self.far_distance),
+                    margin_min=self.adaptive_settings.get('margin_min', 0.15),
+                    margin_max=self.adaptive_settings.get('margin_max', 0.80),
+                    area_thresholds=tuple(self.adaptive_settings.get('area_thresholds', [0.10, 0.05, 0.02]))
+                )
+                self.adaptive_estimators[cam_id] = AdaptiveFrustumEstimator(self.calibrations[cam_id], cfg)
+            except Exception as e:
+                self.get_logger().warn(f"Failed to init adaptive estimator for {cam_id}: {e}")
     
     def initialize_components(self):
         """Initialize processing components"""
@@ -302,7 +323,7 @@ class FrontierNode(Node):
                 )
         
         # Always publish visualization if we have frustums (matched or not)
-        if all_frustums and self.config['visualization']['publish_markers'] and self.viz_pub:
+        if all_frustums and self.config['visualization']['publish_markers'] and hasattr(self, 'viz_pub') and self.viz_pub:
             self.publish_all_frustum_visualization(all_frustums, all_matches)
         
         # 메모리 최적화 - 처리 완료 후 즉시 참조 해제
@@ -334,10 +355,14 @@ class FrontierNode(Node):
             
             # Generate frustum
             try:
+                if self.adaptive_enabled and camera_id in self.adaptive_estimators:
+                    near_d, far_d = self.adaptive_estimators[camera_id].compute_near_far(bbox)
+                else:
+                    near_d, far_d = self.near_distance, self.far_distance
                 frustum = generator.generate_frustum(
                     bbox,
-                    self.near_distance,
-                    self.far_distance
+                    float(near_d),
+                    float(far_d)
                 )
                 frustums.append(frustum)
             except Exception as e:
@@ -498,16 +523,22 @@ class FrontierNode(Node):
         else:
             max_viz_frustums = min(len(all_frustums), 15)  # Normal: 최대 15개
         
-        # Camera-specific colors for unmatched frustums
-        camera_unmatched_colors = {
-            'camera_1': [1.0, 0.5, 0.0, 0.3],  # Orange (semi-transparent) for camera_1
-            'camera_2': [0.0, 0.5, 1.0, 0.3],  # Light Blue (semi-transparent) for camera_2
-        }
-        
-        # Camera-specific colors for matched frustums
-        camera_matched_colors = {
-            'camera_1': [1.0, 1.0, 0.0, 0.6],  # Yellow (more opaque) for camera_1
-            'camera_2': [0.0, 1.0, 1.0, 0.6],  # Cyan (more opaque) for camera_2
+        # Cone class-based colors (RGB values matching actual cone colors)
+        cone_class_colors = {
+            # Blue cone - pure blue
+            'blue_cone': [0.0, 0.0, 1.0],
+            'blue': [0.0, 0.0, 1.0],
+            
+            # Yellow cone - pure yellow  
+            'yellow_cone': [1.0, 1.0, 0.0],
+            'yellow': [1.0, 1.0, 0.0],
+            
+            # Red cone - pure red
+            'red_cone': [1.0, 0.0, 0.0],
+            'red': [1.0, 0.0, 0.0],
+            
+            # Unknown/default - gray
+            'unknown': [0.5, 0.5, 0.5],
         }
         
         # Create a set of matched frustum indices for quick lookup
@@ -537,11 +568,31 @@ class FrontierNode(Node):
                     if is_matched:
                         break
             
-            # Choose color based on match status
+            # Get cone class color based on YOLO detection class_name
+            base_color = cone_class_colors.get('unknown')  # default gray
+            detected_class = 'unknown'
+            if yolo_det and hasattr(yolo_det, 'class_name'):
+                class_name = yolo_det.class_name.lower()
+                detected_class = class_name
+                # Try to find matching color for class
+                for key in cone_class_colors:
+                    if key in class_name or class_name in key:
+                        base_color = cone_class_colors[key]
+                        break
+                
+                # Log cone class detection (only first few to avoid spam)
+                if idx < 3 and self.config['debug']['log_level'] == 'debug':
+                    self.get_logger().debug(
+                        f"[{cam_id}] Frustum {idx}: class='{class_name}' -> color={base_color}"
+                    )
+            
+            # Adjust transparency based on match status
             if is_matched:
-                frustum_color = camera_matched_colors.get(cam_id, [0.5, 0.5, 0.5, 0.6])
+                # Matched: more opaque
+                frustum_color = base_color + [0.6]
             else:
-                frustum_color = camera_unmatched_colors.get(cam_id, [0.5, 0.5, 0.5, 0.3])
+                # Unmatched: more transparent
+                frustum_color = base_color + [0.3]
             
             # Create frustum wireframe marker
             frustum_marker = self.visualizer.create_frustum_marker(
@@ -588,10 +639,12 @@ class FrontierNode(Node):
                 )
                 marker_array.markers.append(line_marker)
                 
-                # Create IoU text with camera ID
+                # Create IoU text with camera ID and cone class
                 text_position = (frustum_center + box_center) / 2.0
+                # Include cone class in text if available
+                text_content = f"{cam_id}\n{detected_class}\nIoU: {iou:.2f}"
                 text_marker = self.visualizer.create_text_marker(
-                    f"{cam_id}\nIoU: {iou:.2f}",
+                    text_content,
                     text_position,
                     self.config['frames']['lidar_frame'],
                     self.config['visualization']['text_scale'],
