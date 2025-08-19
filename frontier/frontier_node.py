@@ -7,8 +7,10 @@ Frustum-based 3D object matching between camera and LiDAR detections
 import os
 import yaml
 import numpy as np
+from pathlib import Path
 from typing import Dict, List, Tuple, Optional
 from scipy.optimize import linear_sum_assignment
+from ament_index_python.packages import get_package_share_directory
 
 import rclpy
 from rclpy.node import Node
@@ -54,9 +56,15 @@ class FrontierNode(Node):
     
     def load_config(self):
         """Load configuration from YAML file"""
-        # Get config file path from parameter or default
-        config_file = self.declare_parameter('config_file', 
-            '/home/user1/ROS2_Workspace/ros2_ws/src/frontier/config/frontier_config.yaml').value
+        # Get config file path from parameter or use package-relative default
+        try:
+            package_share_dir = get_package_share_directory('frontier')
+            default_config_path = Path(package_share_dir) / 'config' / 'frontier_config.yaml'
+        except Exception:
+            # Fallback to source directory if package not installed
+            default_config_path = Path(__file__).parent.parent / 'config' / 'frontier_config.yaml'
+        
+        config_file = self.declare_parameter('config_file', str(default_config_path)).value
         
         if not os.path.exists(config_file):
             self.get_logger().error(f"Config file not found: {config_file}")
