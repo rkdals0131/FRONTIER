@@ -31,9 +31,11 @@ FRONTIER (Frustum-based Refined Object Networking & Tracking via Intersection En
 
 ### Build Package
 ```bash
-# Always activate virtual environment first
-source /home/user1/ROS2_Workspace/ros2_ws/.venv/bin/activate
-cd /home/user1/ROS2_Workspace/ros2_ws
+# Always activate virtual environment first (from workspace root)
+source .venv/bin/activate
+# Or if running from elsewhere:
+# source ${ROS2_WS}/.venv/bin/activate
+cd ${ROS2_WS}  # Navigate to your ROS2 workspace
 colcon build --packages-select frontier
 ```
 

@@ -14,9 +14,9 @@ YOLO detection 또는 수동 바운딩 박스를 사용하여 frustum beam을 RV
 
 ### 1. 기본 실행 (Manual Mode)
 ```bash
-# 가상환경 활성화
-source /home/user1/ROS2_Workspace/ros2_ws/.venv/bin/activate
-source /home/user1/ROS2_Workspace/ros2_ws/install/setup.bash
+# 가상환경 활성화 (workspace root에서)
+source .venv/bin/activate
+source install/setup.bash
 
 # Manual mode로 실행 (기본값)
 ros2 launch frontier frustum_test_launch.py
@@ -48,7 +48,8 @@ ros2 launch frontier frustum_test_launch.py \
 
 ### 5. 테스트 스크립트 사용
 ```bash
-cd /home/user1/ROS2_Workspace/ros2_ws
+# ROS2 workspace로 이동
+cd ${ROS2_WS}  # 또는 실제 workspace 경로
 
 # 기본 실행
 ./src/frontier/scripts/test_frustum_viz.sh

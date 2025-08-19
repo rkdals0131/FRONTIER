@@ -7,8 +7,12 @@ echo "========================================="
 echo "FRONTIER Frustum Visualization Test"
 echo "========================================="
 
+# Get the script's directory and navigate to workspace relative to it
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE_ROOT="$(cd "${SCRIPT_DIR}/../../../.." && pwd)"
+
 # Navigate to ROS2 workspace
-cd /home/user1/ROS2_Workspace/ros2_ws
+cd "${WORKSPACE_ROOT}"
 
 # Activate virtual environment
 source .venv/bin/activate

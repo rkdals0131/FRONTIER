@@ -82,10 +82,10 @@ pip install numpy scipy opencv-python pyyaml
 
 ```bash
 # Activate virtual environment
-source /home/user1/ROS2_Workspace/ros2_ws/.venv/bin/activate
+source ${ROS2_WS}/.venv/bin/activate  # Or source .venv/bin/activate from workspace root
 
 # Navigate to workspace
-cd /home/user1/ROS2_Workspace/ros2_ws
+cd ${ROS2_WS}  # Or navigate to your ROS2 workspace directory
 
 # Build package
 colcon build --packages-select frontier
@@ -296,7 +296,7 @@ Contributions are welcome! Please follow these guidelines:
 
 ## 📄 License
 
-This project is part of the ROS2 workspace at `/home/user1/ROS2_Workspace/ros2_ws`.
+This project is part of a ROS2 workspace.
 
 ## 🙏 Acknowledgments
 
