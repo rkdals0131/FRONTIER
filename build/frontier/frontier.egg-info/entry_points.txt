@@ -1,7 +1,0 @@
-[console_scripts]
-frontier_node = frontier.frontier_node:main
-frustum_visualizer_node = frontier.frustum_visualizer_node:main
-test_frustum_generator = frontier.test_frustum_generator:main
-test_intersection_engine = frontier.test_intersection_engine:main
-test_visualization = frontier.test_visualization:main
-

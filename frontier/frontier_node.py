@@ -57,12 +57,8 @@ class FrontierNode(Node):
     def load_config(self):
         """Load configuration from YAML file"""
         # Get config file path from parameter or use package-relative default
-        try:
-            package_share_dir = get_package_share_directory('frontier')
-            default_config_path = Path(package_share_dir) / 'config' / 'frontier_config.yaml'
-        except Exception:
-            # Fallback to source directory if package not installed
-            default_config_path = Path(__file__).parent.parent / 'config' / 'frontier_config.yaml'
+        package_share_dir = get_package_share_directory('frontier')
+        default_config_path = Path(package_share_dir) / 'config' / 'frontier_config.yaml'
         
         config_file = self.declare_parameter('config_file', str(default_config_path)).value
         

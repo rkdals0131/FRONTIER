@@ -208,14 +208,9 @@ class CalibrationLoader:
         """
         if config_folder is None:
             # 기본 경로 사용 - ament_index를 통해 패키지 경로 찾기
-            try:
-                from ament_index_python.packages import get_package_share_directory
-                frontier_share = get_package_share_directory('frontier')
-                self.config_folder = os.path.join(frontier_share, 'config')
-            except ImportError:
-                # 개발 중일 때는 소스 디렉토리 사용
-                current_dir = os.path.dirname(os.path.abspath(__file__))
-                self.config_folder = os.path.join(os.path.dirname(current_dir), 'config')
+            from ament_index_python.packages import get_package_share_directory
+            frontier_share = get_package_share_directory('frontier')
+            self.config_folder = os.path.join(frontier_share, 'config')
         else:
             self.config_folder = config_folder
     

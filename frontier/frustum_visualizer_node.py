@@ -11,7 +11,7 @@ import numpy as np
 import time
 import threading
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 from ament_index_python.packages import get_package_share_directory
 
 import rclpy
@@ -38,12 +38,8 @@ class FrustumVisualizerNode(Node):
         super().__init__('frustum_visualizer_node')
         
         # Parameters
-        try:
-            package_share_dir = get_package_share_directory('frontier')
-            default_config_path = Path(package_share_dir) / 'config' / 'frontier_config.yaml'
-        except Exception:
-            # Fallback to source directory if package not installed
-            default_config_path = Path(__file__).parent.parent / 'config' / 'frontier_config.yaml'
+        package_share_dir = get_package_share_directory('frontier')
+        default_config_path = Path(package_share_dir) / 'config' / 'frontier_config.yaml'
         
         self.declare_parameter('config_file', str(default_config_path))
         self.declare_parameter('near_distance', 0.5)

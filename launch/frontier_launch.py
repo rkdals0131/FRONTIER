@@ -19,21 +19,12 @@ def launch_setup(context, *args, **kwargs):
     # Get package share directory
     frontier_share = get_package_share_directory('frontier')
     
-    # Configuration file path
+    # Configuration file path - always use package share directory
     config_file = os.path.join(
         frontier_share,
         'config',
         'frontier_config.yaml'
     )
-    
-    # Check if config file exists
-    if not os.path.exists(config_file):
-        # Fallback to source directory during development
-        config_file = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            'config',
-            'frontier_config.yaml'
-        )
     
     # Get launch configurations
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
